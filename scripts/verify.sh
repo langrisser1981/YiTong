@@ -27,7 +27,7 @@ run_web_verification() {
     return 0
   fi
 
-  (cd "${ROOT_DIR}/WebRenderer" && npm run build)
+  (cd "${ROOT_DIR}/WebRenderer" && npm test && npm run build)
 }
 
 run_swift_tests

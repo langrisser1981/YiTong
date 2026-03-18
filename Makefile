@@ -29,7 +29,7 @@ verify-swift:
 	fi
 
 verify-web:
-	@cd WebRenderer && npm run build
+	@cd WebRenderer && npm test && npm run build
 
 run-example:
 	@swift run YiTongExample
