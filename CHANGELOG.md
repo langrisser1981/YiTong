@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-23
+### Changed
+- Slim renderer bundle by curating Shiki language set to ~41 languages (from 371+), reducing gzipped bundle size by ~77% (1.7 MB → 387 KB).
+- Run vitest in CI alongside the web renderer build step.
+
+### Fixed
+- README logo now uses release assets for stable image URLs.
+
 ## [0.1.0] - 2026-03-15
 ### Added
 - Initial public release of YiTong, a Swift Package that renders diffs on Apple platforms through `WKWebView`.
