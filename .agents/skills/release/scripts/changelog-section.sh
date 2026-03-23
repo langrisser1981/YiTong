@@ -20,7 +20,7 @@ awk -v version="$version" '
     capture = 0
     found = 0
   }
-  $0 == target {
+  index($0, target) == 1 {
     capture = 1
     found = 1
     next
