@@ -102,6 +102,14 @@ public final class DiffViewController: UIViewController {
   private func handle(_ event: YiTongHostEvent) {
     onEvent?(YiTongPublicModelAdapter.makeDiffEvent(from: event))
   }
+
+  /// Captures the current WKWebView pixels so a caller can show
+  /// them as a placeholder while a new render is in flight for this same document.
+  public func snapshot(completion: @escaping (UIImage?) -> Void) {
+    host.webView.takeSnapshot(with: nil) { image, _ in
+      completion(image)
+    }
+  }
 }
 #elseif canImport(AppKit)
 import AppKit
@@ -111,7 +119,7 @@ public final class DiffViewController: NSViewController {
   private let host = YiTongWebViewHost(platform: .macos)
   private var document: DiffDocument
   private var configuration: DiffConfiguration
-  private let onEvent: ((DiffEvent) -> Void)?
+  private var onEvent: ((DiffEvent) -> Void)?
   private var documentIdentifier = UUID().uuidString
 
   public init(
@@ -162,7 +170,12 @@ public final class DiffViewController: NSViewController {
     )
   }
 
-  func update(document: DiffDocument, configuration: DiffConfiguration) {
+  func update(document: DiffDocument, configuration: DiffConfiguration, onEvent: ((DiffEvent) -> Void)? = nil) {
+    // `onEvent` was previously fixed at init time, so every
+    // event fired the closure captured for the *first* document ever shown, not the
+    // one relevant to whichever render is currently in flight.
+    self.onEvent = onEvent
+
     let documentChanged = self.document != document
     let configurationChanged = self.configuration != configuration
 
@@ -201,6 +214,14 @@ public final class DiffViewController: NSViewController {
 
   private func handle(_ event: YiTongHostEvent) {
     onEvent?(YiTongPublicModelAdapter.makeDiffEvent(from: event))
+  }
+
+  /// Captures the current WKWebView pixels so a caller can show
+  /// them as a placeholder while a new render is in flight for this same document.
+  public func snapshot(completion: @escaping (NSImage?) -> Void) {
+    host.webView.takeSnapshot(with: nil) { image, _ in
+      completion(image)
+    }
   }
 }
 #endif
