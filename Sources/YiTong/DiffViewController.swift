@@ -2,6 +2,55 @@ import Foundation
 import YiTongCore
 import YiTongBridge
 
+@MainActor
+final class DiffViewControllerEventRouter {
+  private var onEvent: ((DiffEvent) -> Void)?
+  private var pendingOnEvent: ((DiffEvent) -> Void)?
+  private var hasPendingDocumentSwap = false
+
+  init(onEvent: ((DiffEvent) -> Void)?) {
+    self.onEvent = onEvent
+  }
+
+  func replaceImmediately(with onEvent: ((DiffEvent) -> Void)?) {
+    self.onEvent = onEvent
+    pendingOnEvent = nil
+    hasPendingDocumentSwap = false
+  }
+
+  func prepareUpdate(documentChanged: Bool, onEvent: ((DiffEvent) -> Void)?) {
+    if documentChanged || hasPendingDocumentSwap {
+      pendingOnEvent = onEvent
+      hasPendingDocumentSwap = true
+    } else {
+      self.onEvent = onEvent
+    }
+  }
+
+  func handle(_ event: DiffEvent) {
+    // Only `.didRender` reliably confirms the pending document has taken over
+    // the screen. `.didFail` can happen before any repaint, so it belongs to the
+    // pending handler without proving that interaction events should switch yet.
+    switch event {
+    case .didRender:
+      if hasPendingDocumentSwap {
+        onEvent = pendingOnEvent
+        pendingOnEvent = nil
+        hasPendingDocumentSwap = false
+      }
+      onEvent?(event)
+    case .didFail:
+      if hasPendingDocumentSwap {
+        pendingOnEvent?(event)
+      } else {
+        onEvent?(event)
+      }
+    default:
+      onEvent?(event)
+    }
+  }
+}
+
 #if canImport(UIKit)
 import UIKit
 
@@ -10,7 +59,7 @@ public final class DiffViewController: UIViewController {
   private let host = YiTongWebViewHost(platform: .ios)
   private var document: DiffDocument
   private var configuration: DiffConfiguration
-  private let onEvent: ((DiffEvent) -> Void)?
+  private let eventRouter: DiffViewControllerEventRouter
   private var documentIdentifier = UUID().uuidString
 
   public init(
@@ -20,7 +69,7 @@ public final class DiffViewController: UIViewController {
   ) {
     self.document = document
     self.configuration = configuration
-    self.onEvent = onEvent
+    self.eventRouter = DiffViewControllerEventRouter(onEvent: onEvent)
     super.init(nibName: nil, bundle: nil)
   }
 
@@ -62,9 +111,26 @@ public final class DiffViewController: UIViewController {
     )
   }
 
-  func update(document: DiffDocument, configuration: DiffConfiguration) {
+  func update(document: DiffDocument, configuration: DiffConfiguration, onEvent: ((DiffEvent) -> Void)? = nil) {
     let documentChanged = self.document != document
     let configurationChanged = self.configuration != configuration
+
+    guard isViewLoaded else {
+      eventRouter.replaceImmediately(with: onEvent)
+
+      guard documentChanged || configurationChanged else {
+        return
+      }
+
+      self.document = document
+      self.configuration = configuration
+      if documentChanged {
+        documentIdentifier = UUID().uuidString
+      }
+      return
+    }
+
+    eventRouter.prepareUpdate(documentChanged: documentChanged, onEvent: onEvent)
 
     guard documentChanged || configurationChanged else {
       return
@@ -72,13 +138,6 @@ public final class DiffViewController: UIViewController {
 
     self.document = document
     self.configuration = configuration
-
-    guard isViewLoaded else {
-      if documentChanged {
-        documentIdentifier = UUID().uuidString
-      }
-      return
-    }
 
     if documentChanged {
       documentIdentifier = UUID().uuidString
@@ -100,7 +159,7 @@ public final class DiffViewController: UIViewController {
   }
 
   private func handle(_ event: YiTongHostEvent) {
-    onEvent?(YiTongPublicModelAdapter.makeDiffEvent(from: event))
+    eventRouter.handle(YiTongPublicModelAdapter.makeDiffEvent(from: event))
   }
 
   /// Captures the current WKWebView pixels so a caller can show
@@ -119,7 +178,7 @@ public final class DiffViewController: NSViewController {
   private let host = YiTongWebViewHost(platform: .macos)
   private var document: DiffDocument
   private var configuration: DiffConfiguration
-  private var onEvent: ((DiffEvent) -> Void)?
+  private let eventRouter: DiffViewControllerEventRouter
   private var documentIdentifier = UUID().uuidString
 
   public init(
@@ -129,7 +188,7 @@ public final class DiffViewController: NSViewController {
   ) {
     self.document = document
     self.configuration = configuration
-    self.onEvent = onEvent
+    self.eventRouter = DiffViewControllerEventRouter(onEvent: onEvent)
     super.init(nibName: nil, bundle: nil)
   }
 
@@ -171,13 +230,42 @@ public final class DiffViewController: NSViewController {
   }
 
   func update(document: DiffDocument, configuration: DiffConfiguration, onEvent: ((DiffEvent) -> Void)? = nil) {
-    // `onEvent` was previously fixed at init time, so every
-    // event fired the closure captured for the *first* document ever shown, not the
-    // one relevant to whichever render is currently in flight.
-    self.onEvent = onEvent
-
     let documentChanged = self.document != document
     let configurationChanged = self.configuration != configuration
+
+    // Before the view loads, nothing has ever been rendered, so there is no
+    // old document on screen to protect from a premature handler swap — the
+    // deferred-handoff dance below doesn't apply yet. Assign the handler
+    // immediately so it's already in place for the `.didFinishInitialLoad`
+    // event `viewDidLoad` triggers when the first render kicks off.
+    guard isViewLoaded else {
+      eventRouter.replaceImmediately(with: onEvent)
+
+      guard documentChanged || configurationChanged else {
+        return
+      }
+
+      self.document = document
+      self.configuration = configuration
+      if documentChanged {
+        documentIdentifier = UUID().uuidString
+      }
+      return
+    }
+
+    // `onEvent` was previously fixed at init time, so every event fired the
+    // closure captured for the *first* document ever shown, not the one
+    // relevant to whichever render is currently in flight. Simply reassigning
+    // it here would fix that but open a narrower race: the old document can
+    // still be on screen (and generating interaction events) for a moment
+    // after we've issued the new render request, since the actual repaint
+    // happens asynchronously on the JS side. So a document change defers the
+    // swap until that new document's own render confirms it has taken over;
+    // a configuration-only change has no such transition and can swap right away.
+    // While a document swap is still in flight, later handler updates must
+    // also target the pending handler, not `onEvent` directly, or they'd be
+    // installed before the old document has finished handing off.
+    eventRouter.prepareUpdate(documentChanged: documentChanged, onEvent: onEvent)
 
     guard documentChanged || configurationChanged else {
       return
@@ -185,13 +273,6 @@ public final class DiffViewController: NSViewController {
 
     self.document = document
     self.configuration = configuration
-
-    guard isViewLoaded else {
-      if documentChanged {
-        documentIdentifier = UUID().uuidString
-      }
-      return
-    }
 
     if documentChanged {
       documentIdentifier = UUID().uuidString
@@ -213,7 +294,7 @@ public final class DiffViewController: NSViewController {
   }
 
   private func handle(_ event: YiTongHostEvent) {
-    onEvent?(YiTongPublicModelAdapter.makeDiffEvent(from: event))
+    eventRouter.handle(YiTongPublicModelAdapter.makeDiffEvent(from: event))
   }
 
   /// Captures the current WKWebView pixels so a caller can show

@@ -219,4 +219,70 @@ final class YiTongTests: XCTestCase {
 
     XCTAssertNotNil(controller)
   }
+
+  @MainActor
+  func testEventRouterKeepsOldHandlerUntilPendingDocumentRenders() {
+    let click = DiffEvent.didClickLine(
+      DiffLineReference(fileIndex: 0, side: .new, number: 12, kind: .addition)
+    )
+    let rendered = DiffEvent.didRender(DiffRenderSummary(fileCount: 1))
+    var oldEvents: [DiffEvent] = []
+    var newEvents: [DiffEvent] = []
+    let router = DiffViewControllerEventRouter(onEvent: { event in
+      oldEvents.append(event)
+    })
+
+    router.prepareUpdate(documentChanged: true) { event in
+      newEvents.append(event)
+    }
+    router.handle(click)
+    router.handle(rendered)
+    router.handle(.didChangeSelection(nil))
+
+    XCTAssertEqual(oldEvents, [click])
+    XCTAssertEqual(newEvents, [rendered, .didChangeSelection(nil)])
+  }
+
+  @MainActor
+  func testEventRouterDeliversPendingFailureWithoutPromotingInteractions() {
+    let failure = DiffEvent.didFail(DiffError(code: "render-failed", message: "Unable to render"))
+    let click = DiffEvent.didClickLine(
+      DiffLineReference(fileIndex: 0, side: .old, number: 4, kind: .deletion)
+    )
+    let rendered = DiffEvent.didRender(DiffRenderSummary(fileCount: 2))
+    var oldEvents: [DiffEvent] = []
+    var newEvents: [DiffEvent] = []
+    let router = DiffViewControllerEventRouter(onEvent: { event in
+      oldEvents.append(event)
+    })
+
+    router.prepareUpdate(documentChanged: true) { event in
+      newEvents.append(event)
+    }
+    router.handle(failure)
+    router.handle(click)
+    router.handle(rendered)
+    router.handle(.didFinishInitialLoad)
+
+    XCTAssertEqual(oldEvents, [click])
+    XCTAssertEqual(newEvents, [failure, rendered, .didFinishInitialLoad])
+  }
+
+  @MainActor
+  func testEventRouterCanPromoteNilHandlerAfterPendingDocumentRenders() {
+    let click = DiffEvent.didClickLine(
+      DiffLineReference(fileIndex: 0, side: .unified, number: 7, kind: .context)
+    )
+    var oldEvents: [DiffEvent] = []
+    let router = DiffViewControllerEventRouter(onEvent: { event in
+      oldEvents.append(event)
+    })
+
+    router.prepareUpdate(documentChanged: true, onEvent: nil)
+    router.handle(click)
+    router.handle(.didRender(DiffRenderSummary(fileCount: 1)))
+    router.handle(click)
+
+    XCTAssertEqual(oldEvents, [click])
+  }
 }
