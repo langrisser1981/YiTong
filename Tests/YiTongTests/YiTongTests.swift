@@ -249,7 +249,6 @@ final class YiTongTests: XCTestCase {
     let click = DiffEvent.didClickLine(
       DiffLineReference(fileIndex: 0, side: .old, number: 4, kind: .deletion)
     )
-    let rendered = DiffEvent.didRender(DiffRenderSummary(fileCount: 2))
     var oldEvents: [DiffEvent] = []
     var newEvents: [DiffEvent] = []
     let router = DiffViewControllerEventRouter(onEvent: { event in
@@ -260,12 +259,14 @@ final class YiTongTests: XCTestCase {
       newEvents.append(event)
     }
     router.handle(failure)
+    router.prepareUpdate(documentChanged: false) { event in
+      newEvents.append(event)
+    }
     router.handle(click)
-    router.handle(rendered)
     router.handle(.didFinishInitialLoad)
 
-    XCTAssertEqual(oldEvents, [click])
-    XCTAssertEqual(newEvents, [failure, rendered, .didFinishInitialLoad])
+    XCTAssertEqual(oldEvents, [click, .didFinishInitialLoad])
+    XCTAssertEqual(newEvents, [failure])
   }
 
   @MainActor

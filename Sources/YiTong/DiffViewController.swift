@@ -29,8 +29,9 @@ final class DiffViewControllerEventRouter {
 
   func handle(_ event: DiffEvent) {
     // Only `.didRender` reliably confirms the pending document has taken over
-    // the screen. `.didFail` can happen before any repaint, so it belongs to the
-    // pending handler without proving that interaction events should switch yet.
+    // the screen. A failed pending swap never takes over, so keep the pending
+    // handoff in place to prevent follow-up SwiftUI updates from installing the
+    // failed document's handler while the old document is still visible.
     switch event {
     case .didRender:
       if hasPendingDocumentSwap {
