@@ -4,9 +4,14 @@ import YiTongBridge
 
 @MainActor
 final class DiffViewControllerEventRouter {
+  private enum PendingHandoff {
+    case none
+    case waitingForRender(((DiffEvent) -> Void)?)
+    case failed(((DiffEvent) -> Void)?)
+  }
+
   private var onEvent: ((DiffEvent) -> Void)?
-  private var pendingOnEvent: ((DiffEvent) -> Void)?
-  private var hasPendingDocumentSwap = false
+  private var pendingHandoff: PendingHandoff = .none
 
   init(onEvent: ((DiffEvent) -> Void)?) {
     self.onEvent = onEvent
@@ -14,36 +19,45 @@ final class DiffViewControllerEventRouter {
 
   func replaceImmediately(with onEvent: ((DiffEvent) -> Void)?) {
     self.onEvent = onEvent
-    pendingOnEvent = nil
-    hasPendingDocumentSwap = false
+    pendingHandoff = .none
   }
 
   func prepareUpdate(documentChanged: Bool, onEvent: ((DiffEvent) -> Void)?) {
-    if documentChanged || hasPendingDocumentSwap {
-      pendingOnEvent = onEvent
-      hasPendingDocumentSwap = true
-    } else {
+    if documentChanged {
+      pendingHandoff = .waitingForRender(onEvent)
+      return
+    }
+
+    switch pendingHandoff {
+    case .none:
       self.onEvent = onEvent
+    case .waitingForRender:
+      pendingHandoff = .waitingForRender(onEvent)
+    case .failed:
+      pendingHandoff = .failed(onEvent)
     }
   }
 
   func handle(_ event: DiffEvent) {
     // Only `.didRender` reliably confirms the pending document has taken over
-    // the screen. A failed pending swap never takes over, so keep the pending
-    // handoff in place to prevent follow-up SwiftUI updates from installing the
-    // failed document's handler while the old document is still visible.
+    // the screen. A failed pending swap keeps its own state so follow-up SwiftUI
+    // updates cannot install the failed document's handler while the old document
+    // is still visible.
     switch event {
     case .didRender:
-      if hasPendingDocumentSwap {
+      if case .waitingForRender(let pendingOnEvent) = pendingHandoff {
         onEvent = pendingOnEvent
-        pendingOnEvent = nil
-        hasPendingDocumentSwap = false
+        pendingHandoff = .none
       }
       onEvent?(event)
     case .didFail:
-      if hasPendingDocumentSwap {
+      switch pendingHandoff {
+      case .waitingForRender(let pendingOnEvent):
         pendingOnEvent?(event)
-      } else {
+        pendingHandoff = .failed(pendingOnEvent)
+      case .failed(let pendingOnEvent):
+        pendingOnEvent?(event)
+      case .none:
         onEvent?(event)
       }
     default:

@@ -246,6 +246,7 @@ final class YiTongTests: XCTestCase {
   @MainActor
   func testEventRouterDeliversPendingFailureWithoutPromotingInteractions() {
     let failure = DiffEvent.didFail(DiffError(code: "render-failed", message: "Unable to render"))
+    let oldRender = DiffEvent.didRender(DiffRenderSummary(fileCount: 1))
     let click = DiffEvent.didClickLine(
       DiffLineReference(fileIndex: 0, side: .old, number: 4, kind: .deletion)
     )
@@ -262,10 +263,11 @@ final class YiTongTests: XCTestCase {
     router.prepareUpdate(documentChanged: false) { event in
       newEvents.append(event)
     }
+    router.handle(oldRender)
     router.handle(click)
     router.handle(.didFinishInitialLoad)
 
-    XCTAssertEqual(oldEvents, [click, .didFinishInitialLoad])
+    XCTAssertEqual(oldEvents, [oldRender, click, .didFinishInitialLoad])
     XCTAssertEqual(newEvents, [failure])
   }
 
