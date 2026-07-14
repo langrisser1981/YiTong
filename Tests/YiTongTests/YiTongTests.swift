@@ -232,11 +232,11 @@ final class YiTongTests: XCTestCase {
       oldEvents.append(event)
     })
 
-    router.prepareUpdate(documentChanged: true) { event in
+    router.prepareUpdate(documentChanged: true, documentIdentifier: "document-b") { event in
       newEvents.append(event)
     }
     router.handle(click)
-    router.handle(rendered)
+    router.handle(rendered, renderedDocumentIdentifier: "document-b")
     router.handle(.didChangeSelection(nil))
 
     XCTAssertEqual(oldEvents, [click])
@@ -256,19 +256,43 @@ final class YiTongTests: XCTestCase {
       oldEvents.append(event)
     })
 
-    router.prepareUpdate(documentChanged: true) { event in
+    router.prepareUpdate(documentChanged: true, documentIdentifier: "document-b") { event in
       newEvents.append(event)
     }
     router.handle(failure)
-    router.prepareUpdate(documentChanged: false) { event in
+    router.prepareUpdate(documentChanged: false, documentIdentifier: "document-b") { event in
       newEvents.append(event)
     }
-    router.handle(oldRender)
+    router.handle(oldRender, renderedDocumentIdentifier: "document-a")
     router.handle(click)
     router.handle(.didFinishInitialLoad)
 
     XCTAssertEqual(oldEvents, [oldRender, click, .didFinishInitialLoad])
     XCTAssertEqual(newEvents, [failure])
+  }
+
+  @MainActor
+  func testEventRouterPromotesFailedHandoffWhenMatchingDocumentLaterRenders() {
+    let failure = DiffEvent.didFail(DiffError(code: "render-failed", message: "Unable to render"))
+    let rendered = DiffEvent.didRender(DiffRenderSummary(fileCount: 1))
+    let click = DiffEvent.didClickLine(
+      DiffLineReference(fileIndex: 0, side: .new, number: 8, kind: .addition)
+    )
+    var oldEvents: [DiffEvent] = []
+    var newEvents: [DiffEvent] = []
+    let router = DiffViewControllerEventRouter(onEvent: { event in
+      oldEvents.append(event)
+    })
+
+    router.prepareUpdate(documentChanged: true, documentIdentifier: "document-b") { event in
+      newEvents.append(event)
+    }
+    router.handle(failure)
+    router.handle(rendered, renderedDocumentIdentifier: "document-b")
+    router.handle(click)
+
+    XCTAssertEqual(oldEvents, [])
+    XCTAssertEqual(newEvents, [failure, rendered, click])
   }
 
   @MainActor
@@ -281,9 +305,9 @@ final class YiTongTests: XCTestCase {
       oldEvents.append(event)
     })
 
-    router.prepareUpdate(documentChanged: true, onEvent: nil)
+    router.prepareUpdate(documentChanged: true, documentIdentifier: "document-b", onEvent: nil)
     router.handle(click)
-    router.handle(.didRender(DiffRenderSummary(fileCount: 1)))
+    router.handle(.didRender(DiffRenderSummary(fileCount: 1)), renderedDocumentIdentifier: "document-b")
     router.handle(click)
 
     XCTAssertEqual(oldEvents, [click])

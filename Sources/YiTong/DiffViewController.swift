@@ -6,8 +6,8 @@ import YiTongBridge
 final class DiffViewControllerEventRouter {
   private enum PendingHandoff {
     case none
-    case waitingForRender(((DiffEvent) -> Void)?)
-    case failed(((DiffEvent) -> Void)?)
+    case waitingForRender(documentIdentifier: String, onEvent: ((DiffEvent) -> Void)?)
+    case failed(documentIdentifier: String, onEvent: ((DiffEvent) -> Void)?)
   }
 
   private var onEvent: ((DiffEvent) -> Void)?
@@ -22,40 +22,49 @@ final class DiffViewControllerEventRouter {
     pendingHandoff = .none
   }
 
-  func prepareUpdate(documentChanged: Bool, onEvent: ((DiffEvent) -> Void)?) {
+  func prepareUpdate(
+    documentChanged: Bool,
+    documentIdentifier: String,
+    onEvent: ((DiffEvent) -> Void)?
+  ) {
     if documentChanged {
-      pendingHandoff = .waitingForRender(onEvent)
+      pendingHandoff = .waitingForRender(documentIdentifier: documentIdentifier, onEvent: onEvent)
       return
     }
 
     switch pendingHandoff {
     case .none:
       self.onEvent = onEvent
-    case .waitingForRender:
-      pendingHandoff = .waitingForRender(onEvent)
-    case .failed:
-      pendingHandoff = .failed(onEvent)
+    case .waitingForRender(let documentIdentifier, _):
+      pendingHandoff = .waitingForRender(documentIdentifier: documentIdentifier, onEvent: onEvent)
+    case .failed(let documentIdentifier, _):
+      pendingHandoff = .failed(documentIdentifier: documentIdentifier, onEvent: onEvent)
     }
   }
 
-  func handle(_ event: DiffEvent) {
+  func handle(_ event: DiffEvent, renderedDocumentIdentifier: String? = nil) {
     // Only `.didRender` reliably confirms the pending document has taken over
     // the screen. A failed pending swap keeps its own state so follow-up SwiftUI
     // updates cannot install the failed document's handler while the old document
     // is still visible.
     switch event {
     case .didRender:
-      if case .waitingForRender(let pendingOnEvent) = pendingHandoff {
+      if case .waitingForRender(let documentIdentifier, let pendingOnEvent) = pendingHandoff,
+         renderedDocumentIdentifier == documentIdentifier {
+        onEvent = pendingOnEvent
+        pendingHandoff = .none
+      } else if case .failed(let documentIdentifier, let pendingOnEvent) = pendingHandoff,
+                renderedDocumentIdentifier == documentIdentifier {
         onEvent = pendingOnEvent
         pendingHandoff = .none
       }
       onEvent?(event)
     case .didFail:
       switch pendingHandoff {
-      case .waitingForRender(let pendingOnEvent):
+      case .waitingForRender(let documentIdentifier, let pendingOnEvent):
         pendingOnEvent?(event)
-        pendingHandoff = .failed(pendingOnEvent)
-      case .failed(let pendingOnEvent):
+        pendingHandoff = .failed(documentIdentifier: documentIdentifier, onEvent: pendingOnEvent)
+      case .failed(_, let pendingOnEvent):
         pendingOnEvent?(event)
       case .none:
         onEvent?(event)
@@ -145,7 +154,12 @@ public final class DiffViewController: UIViewController {
       return
     }
 
-    eventRouter.prepareUpdate(documentChanged: documentChanged, onEvent: onEvent)
+    let nextDocumentIdentifier = documentChanged ? UUID().uuidString : documentIdentifier
+    eventRouter.prepareUpdate(
+      documentChanged: documentChanged,
+      documentIdentifier: nextDocumentIdentifier,
+      onEvent: onEvent
+    )
 
     guard documentChanged || configurationChanged else {
       return
@@ -155,7 +169,7 @@ public final class DiffViewController: UIViewController {
     self.configuration = configuration
 
     if documentChanged {
-      documentIdentifier = UUID().uuidString
+      documentIdentifier = nextDocumentIdentifier
       host.render(request: makeRenderRequest())
     } else if configurationChanged {
       host.updateConfiguration(makeRenderRequest().configuration)
@@ -174,7 +188,17 @@ public final class DiffViewController: UIViewController {
   }
 
   private func handle(_ event: YiTongHostEvent) {
-    eventRouter.handle(YiTongPublicModelAdapter.makeDiffEvent(from: event))
+    let renderedDocumentIdentifier: String?
+    if case .didRender(_, let documentIdentifier) = event {
+      renderedDocumentIdentifier = documentIdentifier
+    } else {
+      renderedDocumentIdentifier = nil
+    }
+
+    eventRouter.handle(
+      YiTongPublicModelAdapter.makeDiffEvent(from: event),
+      renderedDocumentIdentifier: renderedDocumentIdentifier
+    )
   }
 
   /// Captures the current WKWebView pixels so a caller can show
@@ -280,7 +304,12 @@ public final class DiffViewController: NSViewController {
     // While a document swap is still in flight, later handler updates must
     // also target the pending handler, not `onEvent` directly, or they'd be
     // installed before the old document has finished handing off.
-    eventRouter.prepareUpdate(documentChanged: documentChanged, onEvent: onEvent)
+    let nextDocumentIdentifier = documentChanged ? UUID().uuidString : documentIdentifier
+    eventRouter.prepareUpdate(
+      documentChanged: documentChanged,
+      documentIdentifier: nextDocumentIdentifier,
+      onEvent: onEvent
+    )
 
     guard documentChanged || configurationChanged else {
       return
@@ -290,7 +319,7 @@ public final class DiffViewController: NSViewController {
     self.configuration = configuration
 
     if documentChanged {
-      documentIdentifier = UUID().uuidString
+      documentIdentifier = nextDocumentIdentifier
       host.render(request: makeRenderRequest())
     } else if configurationChanged {
       host.updateConfiguration(makeRenderRequest().configuration)
@@ -309,7 +338,17 @@ public final class DiffViewController: NSViewController {
   }
 
   private func handle(_ event: YiTongHostEvent) {
-    eventRouter.handle(YiTongPublicModelAdapter.makeDiffEvent(from: event))
+    let renderedDocumentIdentifier: String?
+    if case .didRender(_, let documentIdentifier) = event {
+      renderedDocumentIdentifier = documentIdentifier
+    } else {
+      renderedDocumentIdentifier = nil
+    }
+
+    eventRouter.handle(
+      YiTongPublicModelAdapter.makeDiffEvent(from: event),
+      renderedDocumentIdentifier: renderedDocumentIdentifier
+    )
   }
 
   /// Captures the current WKWebView pixels so a caller can show
